@@ -6,6 +6,13 @@ require 'optparse'
 require 'timers'
 require 'time'
 require 'csv'
+require 'thread'
+require 'socket'
+
+# remove old socket
+if File.exist?(File.expand_path("~/.reminder/sock")) then
+	File.delete(File.expand_path("~/.reminder/sock"))
+end
 
 $debug = true
 
@@ -34,6 +41,7 @@ def serialize()
 			dbg_out "serializing \'#{key},#{notifier.s()}\'"
 			cls = notifier.class.to_s.split('::')[1] # extract class name without module name
 			datafile.write("#{key},#{notifier.s()},#{cls}\n")
+			notifier.serialized = true
 		end
 	end
 
@@ -52,27 +60,31 @@ def read_data()
 
 	dbg_out "--> File exists. Reading..."
 	CSV.foreach(path) do |row|
-		key = row[0]
-		title = row[1]
-		message = row[2]
-		type = row[3]
-		dbg_out "\nRead #{key} -- #{title}: #{message} (#{type})"
+		read_row(row)
+	end
+end
 
-		if DateTime.parse(key).to_time.gmtime <= DateTime.now.to_time.gmtime+Time.now.gmt_offset then
-			dbg_out "--> This notifier has already expired. It won't be added."
-			next
+def read_row(row)
+	key = row[0]
+	title = row[1]
+	message = row[2]
+	type = row[3]
+	dbg_out "Read #{key} -- #{title}: #{message} (#{type})"
+
+	if DateTime.parse(key).to_time.gmtime <= DateTime.now.to_time.gmtime+Time.now.gmt_offset then
+		dbg_out "--> This notifier has already expired. It won't be added"
+		return
+	end
+
+	if NotifierTypes.const_defined?(type.to_sym) then
+		if $notifiers[key].nil? then
+			$notifiers[key] = []
 		end
 
-		if NotifierTypes.const_defined?(type.to_sym) then
-			if $notifiers[key].nil? then
-				$notifiers[key] = []
-			end
-
-			notif = NotifierTypes.const_get(type.to_sym).new(title, message)
-			# setting this flag makes sure the notifier will not be serialized again
-			notif.serialized = true
-			$notifiers[key].push(notif)
-		end
+		notif = NotifierTypes.const_get(type.to_sym).new(title, message)
+		# setting this flag makes sure the notifier will not be serialized again
+		notif.serialized = true
+		$notifiers[key].push(notif)
 	end
 end
 
@@ -122,7 +134,7 @@ class Zenity < Notifier
 	end
 
 	def notify()
-		system("zenity --info --text \"#{@message}\"")
+		system("zenity --info --text \"#{@message}\" &")
 	end
 end
 
@@ -191,7 +203,7 @@ def read_options()
 end
 
 read_data()
-read_options()
+#read_options()
 
 serialize()
 
@@ -203,16 +215,40 @@ every_minute = timers.every(30) do
 
 	dbg_out "#{key}"
 
-	if not $notifiers[key].nil? then
-		$notifiers[key].each do |notifier|
-			notifier.notify()
+	$ex.synchronize do
+		if not $notifiers[key].nil? then
+			$notifiers[key].each do |notifier|
+				notifier.notify()
+			end
+		end
+
+		$notifiers.delete(key)
+	end # ex.synchronize
+end
+
+$ex = Mutex.new
+serv = UNIXServer.open(File.expand_path("~/.reminder/sock"))
+
+
+# IPC code here
+ipc = Thread.new do
+	loop do
+		s = serv.accept
+		dbg_out "Accepted connection!"
+
+		row = s.gets.chomp
+		dbg_out "Client wrote: #{row}"
+		row = CSV.parse_line(row)
+
+		$ex.synchronize do
+			read_row(row)
 		end
 	end
-
-	$notifiers.delete(key)
 end
 
-
-while not $notifiers.empty? do
-	timers.wait()
+dbg_out "Starting main loop"
+while true do #not $notifiers.empty? do
+		timers.wait()
 end
+
+dbg_out "No more notifiers left. Exiting..."
