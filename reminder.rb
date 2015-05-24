@@ -64,7 +64,7 @@ def read_data()
 	end
 end
 
-def read_row(row)
+def read_row(row, set_serialized_flag=true)
 	key = row[0]
 	title = row[1]
 	message = row[2]
@@ -83,7 +83,7 @@ def read_row(row)
 
 		notif = NotifierTypes.const_get(type.to_sym).new(title, message)
 		# setting this flag makes sure the notifier will not be serialized again
-		notif.serialized = true
+		notif.serialized = set_serialized_flag
 		$notifiers[key].push(notif)
 	end
 end
@@ -241,8 +241,10 @@ ipc = Thread.new do
 		row = CSV.parse_line(row)
 
 		$ex.synchronize do
-			read_row(row)
+			read_row(row, false)
 		end
+
+		serialize()
 	end
 end
 
