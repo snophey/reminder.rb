@@ -1,13 +1,12 @@
 #! /usr/bin/ruby
 
-$default_notifier = :Zenity
-
 require 'optparse'
 require 'timers'
 require 'time'
 require 'csv'
 require 'thread'
 require 'socket'
+require './notifiers.rb'
 
 # remove old socket
 if File.exist?(File.expand_path("~/.reminder/sock")) then
@@ -88,122 +87,10 @@ def read_row(row, set_serialized_flag=true)
 	end
 end
 
-module NotifierTypes
-
-class Notifier
-	attr_accessor :serialized
-
-	def initialize(title, message)
-		@title = title
-		@message = message
-		@serialized = false
-	end
-
-	def notify()
-	end
-
-	def s()
-		return "#{@title},#{@message}"
-	end
-end
-
-# command line notifier
-class CLNotifier < Notifier
-	def initialize(title, message)
-		super(title, message)
-	end
-
-	def notify()
-		dbg_out "#{@title.upcase}: #{@message}"
-	end
-end
-
-class NotifySend < Notifier
-	def initialize(title, message)
-		super(title, message)
-	end
-
-	def notify()
-		system("notify-send \"#{@title}\" \"#{@message}\"")
-	end
-end
-
-class Zenity < Notifier
-	def initialize(title, message)
-		super(title, message)
-	end
-
-	def notify()
-		system("zenity --info --text \"#{@message}\" &")
-	end
-end
-
-end
-
 # hash of dates and arrays of corresponding notifiers
 $notifiers = {}
 
-# this hash will be reused later for command line options
-$options = {}
-
-# this will be replaced by a function that parses command line options
-def read_options()
-
-	print "Notifier (Zenity): "
-	$options["notifier"] = $stdin.gets.chomp
-
-	if $options["notifier"].empty? or not NotifierTypes.const_defined?($options["notifier"].to_sym) then
-		$options["notifier"] = $default_notifier
-	end
-
-	print "Mode (I/a): "
-	$options["mode"] = $stdin.gets.chomp.downcase
-
-	if $options["mode"] != "a" then
-		$options["mode"] = "i"
-	end
-
-	print "Title (optional): "
-	$options["title"] = $stdin.gets.chomp
-	print "Message: "
-	$options["message"] = $stdin.gets.chomp
-
-	if $options["title"].empty? then
-		$options["title"] = "reminder.rb"
-	end
-
-	while $options["message"].empty? do
-		print "Message: "
-		$options["message"] = $stdin.gets.chomp
-	end
-
-	if $options["mode"] == "a" then
-		print "Time (DD.MM.YYYY HH:MM): "
-		$options["time"] = DateTime.parse($stdin.gets.chomp)
-	else
-		puts "You want to be reminded in..."
-		print "...hours: "
-		hours = Integer($stdin.gets.chomp)*3600
-		print "...minutes: "
-		minutes = Integer($stdin.gets.chomp)*60
-		# adding whole numbers would add an entire day to the current time, hence the fractions
-		$options["time"] = DateTime.now + Rational(hours, 86400) + Rational(minutes, 86400)
-	end
-
-	key = "#{$options["time"].day}.#{$options["time"].month}.#{$options["time"].year} #{$options["time"].hour}:#{$options["time"].min}"
-
-	if $notifiers[key].nil? then
-		$notifiers[key] = []
-	end
-
-	dbg_out "adding notifier for key: '#{key}'"
-
-	ntype = NotifierTypes.const_get($options["notifier"].to_sym)
-	$notifiers[key].push(ntype.new($options["title"], $options["message"]))
-end
-
 read_data()
-#read_options()
 
 serialize()
 
