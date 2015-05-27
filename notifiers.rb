@@ -14,7 +14,7 @@ class Notifier
 	end
 
 	def s()
-		return "#{@title},#{@message}"
+		return "\"#{@title}\",\"#{@message}\""
 	end
 end
 
@@ -31,6 +31,9 @@ end
 
 class NotifySend < Notifier
 	def initialize(title, message)
+		if title.empty? then
+			title = "reminder.rb"
+		end
 		super(title, message)
 	end
 
