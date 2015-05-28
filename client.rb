@@ -7,7 +7,7 @@ $default_notifier = :NotifySend
 
 # this hash will be reused later for command line options
 $options = {}
-$options[:notifier] = $default_notifier
+$options[:notifier] = ""
 
 def to_csv(key,notifier)
 		cls = notifier.class.to_s.split('::')[1] # extract class name without module name
@@ -15,10 +15,24 @@ def to_csv(key,notifier)
 end
 
 def abs_time(time_str)
-	return DateTime.parse(time_str)
+	begin
+		return DateTime.parse(time_str)
+	rescue ArgumentError => ae
+		puts ae.message
+		exit
+	end
 end
 
 def rel_time(hours,minutes)
+	begin
+		hours = Integer(hours)
+		minutes = Integer(minutes)
+	rescue ArgumentError => ae
+		puts """Invalid value for time offset. Please use the HH:MM format.\n
+		Example: 1:15 for 1 hour and 15 minutes."""
+		exit
+	end
+
 	# adding whole numbers would add an entire day to the current time, hence the fractions
 	return DateTime.now + Rational(hours*3600, 86400) + Rational(minutes*60, 86400)
 end
@@ -26,9 +40,9 @@ end
 OptionParser.new do |opts|
 	opts.banner = "Usage: reminder.rb [options]"
 
-	opts.on("-d", "--debug", "Enable debug output") do |v|
-		$options[:verbose] = v
-	end
+	#opts.on("-d", "--debug", "Enable debug output") do |v|
+	#	$options[:verbose] = v
+	#end
 
 	opts.on("-g","--guided", "Guided mode") do |g|
 		$options[:guided] = g
@@ -63,7 +77,7 @@ OptionParser.new do |opts|
 	end
 end.parse!
 
-puts $options
+#puts $options
 
 # this will be replaced by a function that parses command line options
 def guided()
@@ -72,10 +86,6 @@ def guided()
 	#	print "Notifier (NotifySend): "
 	#	$options[:notifier] = $stdin.gets.chomp
 	#end
-
-	if $options[:notifier].empty? or not NotifierTypes.const_defined?($options[:notifier].to_sym) then
-		$options[:notifier] = $default_notifier
-	end
 
 	if $options[:mode].nil? then
 		print "Mode (I/a): "
@@ -113,9 +123,9 @@ def guided()
 		elsif $options[:mode]
 			puts "You want to be reminded in..."
 			print "...hours: "
-			hours = Integer($stdin.gets.chomp)
+			hours = $stdin.gets.chomp
 			print "...minutes: "
-			minutes = Integer($stdin.gets.chomp)
+			minutes = $stdin.gets.chomp
 			$options[:time] = rel_time(hours, minutes)
 		end
 	end
@@ -123,6 +133,10 @@ end
 
 def gen_notifier()
 	key = "#{$options[:time].day}.#{$options[:time].month}.#{$options[:time].year} #{$options[:time].hour}:#{$options[:time].min}"
+
+	if $options[:notifier].empty? or not NotifierTypes.const_defined?($options[:notifier]) then
+		$options[:notifier] = $default_notifier
+	end
 	ntype = NotifierTypes.const_get($options[:notifier].to_sym)
 	notifier = ntype.new($options[:title], $options[:message])
 
@@ -133,6 +147,26 @@ if $options[:guided] then
 	guided()
 end
 
-sock = UNIXSocket.open(File.expand_path("~/.reminder/sock"))
-sock.puts(gen_notifier())
+begin
+	sock = UNIXSocket.open(File.expand_path("~/.reminder/sock"))
+rescue Exception => ex
+	puts ex.message
+	puts "Is the server running?"
+	exit
+end
+
+begin
+	sock.puts(gen_notifier())
+	res = Integer(sock.gets.chomp)
+rescue Exception => ex
+	puts ex.message
+	puts "Is the server still running?"
+end
+
+if res == 0 then
+	puts "Notifier added."
+elsif res == 1 then
+	puts "Notifier expired. It won't be added."
+end
+
 sock.close()

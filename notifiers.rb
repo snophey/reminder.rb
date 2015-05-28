@@ -31,7 +31,7 @@ end
 
 class NotifySend < Notifier
 	def initialize(title, message)
-		if title.empty? then
+		if title.nil? || title.empty? then
 			title = "reminder.rb"
 		end
 		super(title, message)

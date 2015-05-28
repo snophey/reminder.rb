@@ -72,7 +72,7 @@ def read_row(row, set_serialized_flag=true)
 
 	if DateTime.parse(key).to_time.gmtime <= DateTime.now.to_time.gmtime+Time.now.gmt_offset then
 		dbg_out "--> This notifier has already expired. It won't be added"
-		return
+		return 1
 	end
 
 	if NotifierTypes.const_defined?(type.to_sym) then
@@ -85,6 +85,8 @@ def read_row(row, set_serialized_flag=true)
 		notif.serialized = set_serialized_flag
 		$notifiers[key].push(notif)
 	end
+
+	return 0
 end
 
 # hash of dates and arrays of corresponding notifiers
@@ -120,18 +122,26 @@ serv = UNIXServer.open(File.expand_path("~/.reminder/sock"))
 # IPC code here
 ipc = Thread.new do
 	loop do
-		s = serv.accept
-		dbg_out "Accepted connection!"
+		begin
+			s = serv.accept
+			dbg_out "Accepted connection!"
 
-		row = s.gets.chomp
-		dbg_out "Client wrote: #{row}"
-		row = CSV.parse_line(row)
+			row = s.gets.chomp
+			dbg_out "Client wrote: #{row}"
+			row = CSV.parse_line(row)
 
-		$ex.synchronize do
-			read_row(row, false)
+			res = 0
+			$ex.synchronize do
+				res = read_row(row, false)
+			end
+
+			s.puts(res.to_s)
+			s.close
+
+			serialize()
+		rescue Exception => ex
+				puts ex.message
 		end
-
-		serialize()
 	end
 end
 
