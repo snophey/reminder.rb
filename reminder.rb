@@ -1,153 +1,174 @@
 #! /usr/bin/ruby
 
-require 'optparse'
-require 'timers'
-require 'time'
-require 'csv'
-require 'thread'
-require 'socket'
 require './notifiers.rb'
+require 'time'
+require 'socket'
+require 'optparse'
 
-# remove old socket
-if File.exist?(File.expand_path("~/.reminder/sock")) then
-	File.delete(File.expand_path("~/.reminder/sock"))
+$default_notifier = :NotifySend
+
+# this hash will be reused later for command line options
+$options = {}
+$options[:notifier] = ""
+
+def to_csv(key,notifier)
+		cls = notifier.class.to_s.split('::')[1] # extract class name without module name
+		return "#{key},#{notifier.s()},#{cls}"
 end
 
-$debug = true
-
-def dbg_out(msg)
-	if $debug then
-		puts "DEBUG: #{msg}"
-	end
-end
-
-def serialize()
-	path = File.expand_path("~/.reminder")
-
-	if not Dir.exist?(path) then
-		Dir.mkdir(path)
-	end
-
-	datafile = File.open("#{path}/data.csv", "a")
-
-	$notifiers.each do |key, group|
-		group.each() do |notifier|
-			# no need to serialize notifiers multiple times!
-			if notifier.serialized then
-				next
-			end
-
-			dbg_out "serializing \'#{key},#{notifier.s()}\'"
-			cls = notifier.class.to_s.split('::')[1] # extract class name without module name
-			datafile.write("#{key},#{notifier.s()},#{cls}\n")
-			notifier.serialized = true
-		end
-	end
-
-	datafile.close()
-end
-
-def read_data()
-	path = File.expand_path("~/.reminder/data.csv")
-
-	dbg_out "Reading data from: #{path}"
-
-	if not File.exist?(path) then
-		dbg_out "File does not exist."
-		return
-	end
-
-	dbg_out "--> File exists. Reading..."
-	CSV.foreach(path) do |row|
-		read_row(row)
+def abs_time(time_str)
+	begin
+		return DateTime.parse(time_str)
+	rescue ArgumentError => ae
+		puts ae.message
+		exit
 	end
 end
 
-def read_row(row, set_serialized_flag=true)
-	key = row[0]
-	title = row[1]
-	message = row[2]
-	type = row[3]
-	dbg_out "Read #{key} -- #{title}: #{message} (#{type})"
-
-	if DateTime.parse(key).to_time.gmtime <= DateTime.now.to_time.gmtime+Time.now.gmt_offset then
-		dbg_out "--> This notifier has already expired. It won't be added"
-		return 1
+def rel_time(hours,minutes)
+	begin
+		hours = Integer(hours)
+		minutes = Integer(minutes)
+	rescue ArgumentError => ae
+		puts """Invalid value for time offset. Please use the HH:MM format.\n
+		Example: 1:15 for 1 hour and 15 minutes."""
+		exit
 	end
 
-	if NotifierTypes.const_defined?(type.to_sym) then
-		if $notifiers[key].nil? then
-			$notifiers[key] = []
-		end
+	# adding whole numbers would add an entire day to the current time, hence the fractions
+	return DateTime.now + Rational(hours*3600, 86400) + Rational(minutes*60, 86400)
+end
 
-		notif = NotifierTypes.const_get(type.to_sym).new(title, message)
-		# setting this flag makes sure the notifier will not be serialized again
-		notif.serialized = set_serialized_flag
-		$notifiers[key].push(notif)
+OptionParser.new do |opts|
+	opts.banner = "Usage: reminder.rb [options]"
+
+	#opts.on("-d", "--debug", "Enable debug output") do |v|
+	#	$options[:verbose] = v
+	#end
+
+	opts.on("-g","--guided", "Guided mode") do |g|
+		$options[:guided] = g
 	end
 
-	return 0
-end
+	opts.on("-iHH_MM", "--in=HH:MM", "Notify me in H hours and M minutes from now.") do |i|
+		$options[:mode] = "i"
+		offsets = i.split(":")
+		$options[:time] = rel_time(Integer(offsets[0]), Integer(offsets[1]))
+	end
 
-# hash of dates and arrays of corresponding notifiers
-$notifiers = {}
+	opts.on("-aDATETIME", "--at=DATETIME", "Notify me at a specified date and time.") do |a|
+		$options[:mode] = "a"
+		$options[:time] = abs_time(a)
+	end
 
-read_data()
+	opts.on("-nNOTIFIER", "--notifier=NOTIFIER", "Notification method. NotifySend if not explicitely specified.") do |n|
+		$options[:notifier] = n
+	end
 
-serialize()
+	opts.on("-t[TITLE]", "--title=[TITLE]", "Title of the message.") do |t|
+		$options[:title] = t || ""
+	end
 
-timers = Timers::Group.new
+	opts.on("-mBODY", "--message=BODY", "Message body.") do |m|
+		$options[:message] = m
+	end
 
-every_minute = timers.every(30) do
-	now = Time.new
-	key = "%i.%i.%i %i:%i" % [now.day, now.month, now.year, now.hour, now.min]
+	opts.on("-h", "--help", "Prints this message") do
+		puts opts
+		exit
+	end
+end.parse!
 
-	dbg_out "#{key}"
+#puts $options
 
-	$ex.synchronize do
-		if not $notifiers[key].nil? then
-			$notifiers[key].each do |notifier|
-				notifier.notify()
-			end
-		end
+# this will be replaced by a function that parses command line options
+def guided()
 
-		$notifiers.delete(key)
-	end # ex.synchronize
-end
+	#if $options[:notifier].nil? then
+	#	print "Notifier (NotifySend): "
+	#	$options[:notifier] = $stdin.gets.chomp
+	#end
 
-$ex = Mutex.new
-serv = UNIXServer.open(File.expand_path("~/.reminder/sock"))
+	if $options[:mode].nil? then
+		print "Mode (I/a): "
+		$options[:mode] = $stdin.gets.chomp.downcase
+	end
 
+	if $options[:mode] != "a" then
+		$options[:mode] = "i"
+	end
 
-# IPC code here
-ipc = Thread.new do
-	loop do
-		begin
-			s = serv.accept
-			dbg_out "Accepted connection!"
+	if $options[:title].nil? then
+		print "Title (optional): "
+		$options[:title] = $stdin.gets.chomp
+	end
 
-			row = s.gets.chomp
-			dbg_out "Client wrote: #{row}"
-			row = CSV.parse_line(row)
+	if $options[:message].nil? then
+		print "Message: "
+		$options[:message] = $stdin.gets.chomp
+	end
 
-			res = 0
-			$ex.synchronize do
-				res = read_row(row, false)
-			end
+	if $options[:title].empty? then
+		$options[:title] = "reminder.rb"
+	end
 
-			s.puts(res.to_s)
-			s.close
+	# make sure that we really get a message
+	while $options[:message].empty? do
+		print "Message: "
+		$options[:message] = $stdin.gets.chomp
+	end
 
-			serialize()
-		rescue Exception => ex
-				puts ex.message
+	if $options[:time].nil? then
+		if $options[:mode] == "a" then
+			print "Time (DD.MM.YYYY HH:MM): "
+			$options[:time] = abs_time($stdin.gets.chomp)
+		elsif $options[:mode]
+			puts "You want to be reminded in..."
+			print "...hours: "
+			hours = $stdin.gets.chomp
+			print "...minutes: "
+			minutes = $stdin.gets.chomp
+			$options[:time] = rel_time(hours, minutes)
 		end
 	end
 end
 
-dbg_out "Starting main loop"
-while true do #not $notifiers.empty? do
-		timers.wait()
+def gen_notifier()
+	key = "#{$options[:time].day}.#{$options[:time].month}.#{$options[:time].year} #{$options[:time].hour}:#{$options[:time].min}"
+
+	if $options[:notifier].empty? or not NotifierTypes.const_defined?($options[:notifier]) then
+		$options[:notifier] = $default_notifier
+	end
+	ntype = NotifierTypes.const_get($options[:notifier].to_sym)
+	notifier = ntype.new($options[:title], $options[:message])
+
+	return to_csv(key, notifier)
 end
 
-dbg_out "No more notifiers left. Exiting..."
+if $options[:guided] then
+	guided()
+end
+
+begin
+	sock = UNIXSocket.open(File.expand_path("~/.reminder/sock"))
+rescue Exception => ex
+	puts ex.message
+	puts "Is the server running?"
+	exit
+end
+
+begin
+	sock.puts(gen_notifier())
+	res = Integer(sock.gets.chomp)
+rescue Exception => ex
+	puts ex.message
+	puts "Is the server still running?"
+end
+
+if res == 0 then
+	puts "Notifier added."
+elsif res == 1 then
+	puts "Notifier expired. It won't be added."
+end
+
+sock.close()
