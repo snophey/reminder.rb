@@ -52,8 +52,14 @@ OptionParser.new do |opts|
 
 	opts.on("-iHH_MM", "--in=HH:MM", "Notify me in H hours and M minutes from now.") do |i|
 		$options[:mode] = "i"
-		offsets = i.split(":")
-		$options[:time] = rel_time(Integer(offsets[0]), Integer(offsets[1]))
+		match = /^([0-9]+):([0-9]+)$/.match(i)
+
+		if match.nil? then
+			puts "Invalid time."
+			exit
+		end
+
+		$options[:time] = rel_time(Integer(match[1]), Integer(match[2]))
 	end
 
 	opts.on("-aDATETIME", "--at=DATETIME", "Notify me at a specified date and time.") do |a|
@@ -81,7 +87,6 @@ end.parse!
 
 #puts $options
 
-# this will be replaced by a function that parses command line options
 def guided()
 
 	#if $options[:notifier].nil? then
